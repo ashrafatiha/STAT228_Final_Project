@@ -12,6 +12,12 @@
         This project analyzes the relationship between show renewals and factors such as popularity, vote average, and network. 
         We explored the correlation between all three factors and visualized renewal rates of different networks and streaming services.
       </p>
+      <p>
+        https://ashrafatiha.github.io/STAT228_Final_Project/
+      </p>
+      <p>
+        
+      </p>
   </main>
 </body>
 </html>
