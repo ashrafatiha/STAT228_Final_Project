@@ -1,0 +1,222 @@
+---
+title: "Streaming the Future: Predicting Shows Renewals with Data"
+author: "Fatiha Ashraf"
+date: "2025-05-06"
+output: 
+  html_document:
+    css: styles.css
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(randomForest)
+library(caret)
+library(pROC)
+library(styler)
+```
+
+```{r, include=FALSE}
+tvshowdata <- read_csv("TMDB_tv_dataset_v3.csv")
+
+View(tvshowdata)
+```
+
+## Introduction
+
+For this project, I will use the dataset “Full TMDb TV Shows Dataset 2024 (150k) by asaniczka.
+https://www.kaggle.com/datasets/asaniczka/full-tmdb-tv-shows-dataset-2023-150k-shows/data 
+
+This data was generated through TMDb and it recorded an extensive list out lining show's names, season count, number of episodes, genre and more. There are 29 columns in this data set and there are 160 thousand plus rows of shows which is being updated weekly. As a marketing major, I thought it would be important to understand why a show is so popular and how I can use that information to market a show. With this, I want to ask if we can predict TV show renewals using network, ratings, and viewership metrics. 
+
+## Data Wrangling 
+
+Due to this data set being so extensive, there is a large amount of wrangling that needs to be done. To make this data set easily digestible, I started with selecting what variables, I actually needed to answer my question. Then alongside that, I filtered through to make sure that there were no empty cells. Once I did this, I noticed that in the networks column there were multiple values in one cell. To partially fix this, I separated the values so that each one would be in their own cells. 
+
+```{r}
+tvshowdata_clean <- tvshowdata |>
+  select(name, number_of_seasons, vote_count, vote_average, popularity, networks, first_air_date, last_air_date, status) |>
+  filter(
+    !is.na(number_of_seasons),
+    !is.na(vote_count),
+    !is.na(vote_average),
+    !is.na(popularity),
+    !is.na(networks),
+    !is.na(first_air_date),
+    !is.na(last_air_date),
+    !is.na(status)
+  ) |>
+  mutate(networks = as.character(networks)) |>
+  separate_rows(networks, sep = ",\\s*")
+```
+
+Once I did all of the cleaning needed here, I realized that the networks column needed to be clearer. It would be difficult to analyze my data when a show has two different networks. To fix this issue, I pivoted the data frame to be wider, so I then could have the networks put in there own separate columns. This led to the problem of shows have over 20+ networks, so what I did to combat this was to only select the columns I needed into the data set. What this did was make it easier to distinguish shows if there were put on two separate services, such as Netflix and FOX. 
+
+```{r}
+tvshowdata_clean <- tvshowdata_clean |>
+  group_by(name) |>
+  mutate(network_id = row_number()) |>
+  pivot_wider(
+    names_from = network_id,
+    values_from = networks,
+    names_prefix = "network"
+  ) |>
+  ungroup() |>
+  select(name, number_of_seasons, vote_count, vote_average, popularity, network1, first_air_date, last_air_date, status)
+```
+
+The last thing I did to make the data easier to analyze was to focus on specific networks/streaming services. I chose to focus on major U.S streaming services. This left me with now only 9 columns and only five thousand rows, making this much easier to analyze. 
+
+```{r}
+selected_networks <- c("HBO", "Netflix", "AMC", "FOX", "The CW", "Disney+", "CBS", "Prime Video", "Hulu", "ABC")
+
+tvshowdata_clean <- tvshowdata_clean |>
+  filter(network1 %in% selected_networks) |>
+  mutate(renewed = number_of_seasons > 1) |>
+  mutate(
+    first_air_date = ymd(first_air_date),
+    last_air_date = ymd(last_air_date),
+    show_duration = as.numeric(difftime(last_air_date, first_air_date, units = "days")),
+    status = as.factor(status),
+    network1 = as.factor(network1),
+    renewed = as.factor(renewed)
+  )
+```
+
+With this my data is finally tidy enough to use. By going through and cleaning all the data, I will have less problems now exploring the data and creating new variables!  
+
+
+## Data Visualization
+
+To answer my question, I wanted to look at the renewal rate by network. From the data given, it is shown that AMC, The CW and HBO are the most likely to renew their shows. While on the other hand, Hulu, Prime Video and Disney+ had the least amount of show renewals.  
+
+
+```{r, include = FALSE}
+network_renewal_rate <- tvshowdata_clean |>
+  group_by(network1) |>
+  summarise(
+    count = n(),
+    renewal_rate = mean(as.numeric((renewed)))
+  ) |>
+  arrange(desc(renewal_rate))
+
+network_renewal_rate
+```
+
+```{r, echo=FALSE}
+ggplot(network_renewal_rate, aes(x = reorder(network1, renewal_rate), y = renewal_rate)) +
+  geom_col(fill = "lightpink") +
+  coord_flip() +
+  labs(
+    title = "TV Show Renewal Rates by Network",
+    x = "Network",
+    y = "Renewal Rate"
+  ) +
+  theme_minimal()
+```
+
+
+
+## Modeling
+
+To understand my data, I decided to use a logistic regression model. What logistic regression does is show the possibility of something happening on a scale of one to zero. In simple terms, it can be that one is equal to “will happen” while zero is equal to “won’t happen”. In my case, we want to look at shows that are renewed vs those that aren't, so my variables will be “renewed” and “not renewed”. 
+
+To start I split the data into training and testing sets using createDataPartition, reserving 70% of the data for training and the remaining 30% for testing. This ensures that model evaluation is performed on unseen data. The training set contained 4,232 shows, while the test set had 1,812.
+
+```{r, warning =FALSE}
+set.seed(34234)
+
+train_indexes <- createDataPartition(tvshowdata_clean$renewed, p = 0.7, list = FALSE)
+tv_train <- slice(tvshowdata_clean, train_indexes)
+tv_test <- slice(tvshowdata_clean, -train_indexes)
+```
+
+Next, I fit the logistic regression model using network, vote average, and popularity as predictors. What the model showed was that higher voting averages and higher popularity scores were associated much more with the likely hood of renewal. Shows that aired on services such as Netflix, Hulu or Disney + were less likely to be renewed than AMC, The CW and HBO. This is something that was shown earlier when looking at the data visualization. 
+
+```{r, warning = FALSE}
+fit <- glm(renewed ~ network1 + vote_average + popularity, data = tv_train, family = "binomial")
+
+summary(fit)
+```
+
+After fitting the model, this is where we evaluate the model to make sure that the data is accurate. It is important to split the data into two sets, the training set and the test set. The training data is used to teach the learning model, showing it patterns and relationships within data. While the testing set an unseen data set, it has not been used by the model. It provides an unbiased evaluation of the model fit. Once split, it needs to be evaluated through the confusion matrix. 
+
+Performance was evaluated using confusion matrices, which showed a sensitivity of 71.4% on the training set and 67.5% on the testing set. These results suggest that the model is able to generalize reasonably well and capture the majority of actual renewals. 
+
+
+```{r warning=FALSE, include=FALSE}
+# Training Set
+threshold <- .3
+
+predicted_prob_train <- predict(fit, newdata = tv_train, type = "response")
+
+predicted_class_train <- as.factor(if_else(predicted_prob_train > threshold, "TRUE", "FALSE"))
+
+predicted_class_train <- factor(predicted_class_train,
+  levels = c("TRUE", "FALSE"),
+  labels = c("Renewed", "Not Renewed")
+)
+
+tv_train$renewed <- factor(tv_train$renewed,
+  levels = c("TRUE", "FALSE"),
+  labels = c("Renewed", "Not Renewed")
+)
+```
+
+```{r, warning = FALSE, include=FALSE}
+confusion_matrix_train <- confusionMatrix(
+  data = predicted_class_train,
+  reference = tv_train$renewed,
+  positive = "Renewed"
+)
+
+confusion_matrix_train$byClass["Sensitivity"]
+```
+
+```{r, warning = FALSE, include =FALSE}
+# Testing Set
+predicted_prob_test <- predict(fit, newdata = tv_test, type = "response")
+
+predicted_class_test <- as.factor(if_else(predicted_prob_test > threshold, "TRUE", "FALSE"))
+
+predicted_class_test <- factor(predicted_class_test,
+  levels = c("TRUE", "FALSE"),
+  labels = c("Renewed", "Not Renewed")
+)
+
+tv_test$renewed <- factor(tv_test$renewed,
+  levels = c("TRUE", "FALSE"),
+  labels = c("Renewed", "Not Renewed")
+)
+```
+
+```{r, warning = FALSE, include =FALSE }
+confision_matrix_test <- confusionMatrix(
+  data = predicted_class_test,
+  reference = tv_test$renewed,
+  positive = "Renewed"
+)
+
+confision_matrix_test$byClass["Sensitivity"]
+```
+
+The logistic regression model confirms that a show's networks, user ratings and popularity can be useful predictors if a show will be renewed or not.
+
+In addition to the confusion matrices, I thought it would be important to evaluate the logistic regression using an ROC curve. This provides a view of the model performance by plotting the true positive rates against false positive rates. This helps assess how well the model distinguishes between renewed and non-renewed shows. The AUC has a score of 0.732, which means the model is fairly good, it correctly distinguishes renewed shows from cancelled ones about 73% of the time. While it’s not perfect, it performs noticeably better than random guessing and shows promise for predicting TV show renewals based on available data.
+
+```{r, message=FALSE, include=FALSE}
+roc_obj <- roc(tv_test$renewed, predicted_prob_test)
+```
+
+```{r}
+plot(roc_obj, col = "seagreen", main = "ROC Curve for TV Show Renewal", print.auc = TRUE)
+```
+
+## Conclusion
+
+This project set out to answer a central question: Can we predict TV show renewals using network, average ratings and popularity. Using data from over 5,000 TV shows and narrowing the scope to major U.S. networks, we cleaned and prepared the dataset to focus on key predictors: network, vote average, and popularity. Through data visualization, we found that networks like AMC, HBO, and The CW tend to have higher renewal rates, while services like Hulu, Disney+, and Prime Video were less consistent in renewing shows.
+
+Our logistic regression model confirmed these trends,higher viewer ratings and popularity scores were strongly associated with renewals, and network affiliation significantly influenced renewal likelihood. The model demonstrated reasonable accuracy, with a sensitivity of 71.4% on the training set and 67.5% on the testing set. An ROC curve yielded an AUC of 0.732, indicating the model can distinguish between renewed and non-renewed shows well. 
+
+On the other hand, there are limitations. First, our definition of “renewed” as having more than one season may miss shows that are like mini-series or have been rebooted. Lastly, important factors such as production costs, critical reviews, or audience demographics weren’t included, which could improve the model’s precision.
+
+Looking forward, future analysis could expand to multi-label classification for shows appearing on multiple networks or incorporate natural language processing to analyze show descriptions and reviews. With more robust data and advanced modeling techniques, we can better understand not just if a show will be renewed but why.
