@@ -16,7 +16,7 @@
         https://ashrafatiha.github.io/STAT228_Final_Project/
       </p>
       <p>
-        Fatiha_Ashraf_Final_Project/Predicting Longevity of TV Shows.pptx
+        https://github.com/ashrafatiha/STAT228_Final_Project/blob/c2f85d2bb26a38da4030dd2cd7fcda48c1b2a435/Fatiha_Ashraf_Final_Project/Predicting%20Longevity%20of%20TV%20Shows.pptx
       </p>
   </main>
 </body>
